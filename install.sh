@@ -13,7 +13,7 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 # Progress tracking
-TOTAL_STEPS=11
+TOTAL_STEPS=12
 CURRENT_STEP=0
 
 # Function to print status with progress
@@ -281,6 +281,18 @@ if [ ! -d "$ZSH_CUSTOM/plugins/zsh-history-substring-search" ]; then
         $ZSH_CUSTOM/plugins/zsh-history-substring-search
 fi
 
+# Fast syntax highlighting
+if [ ! -d "$ZSH_CUSTOM/plugins/fast-syntax-highlighting" ]; then
+    git clone https://github.com/zdharma-continuum/fast-syntax-highlighting \
+        $ZSH_CUSTOM/plugins/fast-syntax-highlighting
+fi
+
+# You Should Use plugin
+if [ ! -d "$ZSH_CUSTOM/plugins/you-should-use" ]; then
+    git clone https://github.com/MichaelAquilina/zsh-you-should-use \
+        $ZSH_CUSTOM/plugins/you-should-use
+fi
+
 success "Zsh plugins installed"
 
 # Step 7: Install Oh My Tmux
@@ -293,6 +305,15 @@ if [ ! -d "$HOME/.tmux" ]; then
     success "Oh My Tmux installed"
 else
     success "Oh My Tmux already installed"
+fi
+
+# Install Tmux Plugin Manager for session persistence
+if [ ! -d "$HOME/.tmux/plugins/tpm" ]; then
+    status "Installing Tmux Plugin Manager (for session persistence)..."
+    git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
+    success "TPM installed - sessions will now persist across reboots!"
+else
+    success "TPM already installed"
 fi
 
 # Step 8: Create configuration files
@@ -317,6 +338,8 @@ plugins=(
   zsh-syntax-highlighting
   zsh-completions
   zsh-history-substring-search
+  fast-syntax-highlighting
+  you-should-use
   fzf
   tmux
 )
@@ -329,6 +352,11 @@ ZSH_AUTOSUGGEST_STRATEGY=(history completion)
 ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE=20
 ZSH_AUTOSUGGEST_USE_ASYNC=true
 ZSH_AUTOSUGGEST_HISTORY_IGNORE="cd *"
+
+# You Should Use plugin configuration
+export YSU_MESSAGE_POSITION="after"
+export YSU_MODE=ALL
+export YSU_HARDCORE=0  # Set to 1 to force alias usage
 ZSH_AUTOSUGGEST_COMPLETION_IGNORE="git *"
 
 # Accept auto-suggestion with right arrow
@@ -474,23 +502,60 @@ backup_existing_config ~/.config/ghostty/config
 cat > ~/.config/ghostty/config << 'GHOSTTY'
 # Claude Code Professional Ghostty Configuration
 
-# Font - Smaller and more readable
+# Font settings
 font-family = "MesloLGS Nerd Font"
-font-size = 12
-adjust-cell-height = -2
+font-size = 14
 
-# Window appearance - With proper title bar
+# Window settings
+window-padding-x = 10
+window-padding-y = 10
 window-decoration = true
-window-padding-x = 8
-window-padding-y = 8
-background-opacity = 0.92
-macos-window-shadow = true
 
-# Simple, clean appearance - no custom colors to avoid errors
+# Colors and appearance with blur
+background-opacity = 0.95
+background-blur-radius = 20
+window-vsync = true
 
-# Terminal settings
-scrollback-limit = 10000
-confirm-close-surface = false
+# Cursor
+cursor-style = block
+
+# Scrollback
+scrollback-limit = 100000
+
+# Copy on select
+copy-on-select = true
+
+# macOS specific
+macos-option-as-alt = true
+macos-titlebar-style = native
+
+# Performance
+gtk-single-instance = true
+
+# Shell integration
+shell-integration = detect
+
+# Custom color scheme (Dracula-inspired)
+palette = 0=#21222c
+palette = 1=#ff5555
+palette = 2=#50fa7b
+palette = 3=#f1fa8c
+palette = 4=#bd93f9
+palette = 5=#ff79c6
+palette = 6=#8be9fd
+palette = 7=#f8f8f2
+palette = 8=#6272a4
+palette = 9=#ff6e6e
+palette = 10=#69ff94
+palette = 11=#ffffa5
+palette = 12=#d6acff
+palette = 13=#ff92df
+palette = 14=#a4ffff
+palette = 15=#ffffff
+foreground = #f8f8f2
+background = #282a36
+selection-background = #44475a
+selection-foreground = #f8f8f2
 
 # Natural text editing key bindings
 keybind = alt+left=text:\x1b[1;5D
@@ -566,6 +631,35 @@ bind m resize-pane -Z #!important
 # Copy mode vim bindings
 bind -T copy-mode-vi v send-keys -X begin-selection #!important
 bind -T copy-mode-vi y send-keys -X copy-selection-and-cancel #!important
+
+# ============================================================================
+# Tmux Plugin Manager and Session Persistence
+# ============================================================================
+
+# List of plugins
+set -g @plugin 'tmux-plugins/tpm'
+set -g @plugin 'tmux-plugins/tmux-resurrect'
+set -g @plugin 'tmux-plugins/tmux-continuum'
+
+# Resurrect settings - save and restore sessions
+set -g @resurrect-save 'S'
+set -g @resurrect-restore 'R'
+set -g @resurrect-capture-pane-contents 'on'
+set -g @resurrect-strategy-vim 'session'
+set -g @resurrect-strategy-nvim 'session'
+# Restore programs including Claude
+set -g @resurrect-processes 'claude ssh mosh "~yarn dev" "~npm run dev" "~pnpm dev"'
+
+# Continuum settings - automatic save/restore
+set -g @continuum-restore 'on'
+set -g @continuum-boot 'on'
+set -g @continuum-save-interval '15' # Save every 15 minutes
+
+# Show continuum status in status bar (optional)
+set -g status-right 'Continuum: #{continuum_status} | %H:%M %d-%b-%y'
+
+# Initialize TMUX plugin manager (keep this line at the very bottom)
+run '~/.tmux/plugins/tpm/tpm'
 
 # Double click to select word
 set -g word-separators ""
@@ -781,34 +875,62 @@ status "Creating Claude Code launcher script..."
 cat > ~/cc-multi.sh << 'LAUNCHER'
 #!/bin/bash
 # Launch 4 Claude Code instances in a 2x2 grid
+# Fixed version with correct pane handling
 
 SESSION="claude-multi"
+
+# Check if tmux is installed
+if ! command -v tmux &> /dev/null; then
+    echo "Error: tmux is not installed. Please install tmux first."
+    exit 1
+fi
+
+# Check if claude command exists
+if ! command -v claude &> /dev/null; then
+    echo "Error: claude command not found. Please ensure Claude Code is installed."
+    exit 1
+fi
 
 # Kill existing session if it exists
 tmux kill-session -t $SESSION 2>/dev/null
 
-# Create new session with 4 panes
-tmux new-session -d -s $SESSION -n 'Claude Code'
+echo "Creating 4 Claude Code instances..."
 
-# Launch first Claude Code (top-left)
-tmux send-keys -t $SESSION:0 'claude code' C-m
+# Create new session with first claude instance
+tmux new-session -d -s $SESSION 'claude code'
 
-# Split vertically (top-right)
-tmux split-window -h -t $SESSION:0
-tmux send-keys -t $SESSION:0 'claude code' C-m
+# Split horizontally to create pane 2 on the right
+tmux split-window -h -t $SESSION 'claude code'
 
-# Select first pane and split horizontally (bottom-left)
-tmux select-pane -t $SESSION:0.0
-tmux split-window -v -t $SESSION:0
-tmux send-keys -t $SESSION:0 'claude code' C-m
+# Now we have panes 1 (left) and 2 (right)
+# Select pane 1 and split it vertically
+tmux select-pane -t ${SESSION}.1
+tmux split-window -v -t $SESSION 'claude code'
 
-# Select second pane and split horizontally (bottom-right)
-tmux select-pane -t $SESSION:0.2
-tmux split-window -v -t $SESSION:0
-tmux send-keys -t $SESSION:0 'claude code' C-m
+# Select pane 2 (the original right pane) and split it vertically
+tmux select-pane -t ${SESSION}.2
+tmux split-window -v -t $SESSION 'claude code'
 
-# Balance panes and attach
-tmux select-layout -t $SESSION:0 tiled
+# Apply tiled layout for even sizing
+tmux select-layout -t $SESSION tiled
+
+# Configure pane borders
+tmux set-option -t $SESSION pane-border-status top
+tmux set-option -t $SESSION pane-border-format " Claude #{pane_index} "
+
+# Select first pane for a clean start
+tmux select-pane -t ${SESSION}.1
+
+echo "✓ Successfully created 4 Claude instances"
+echo ""
+echo "Navigation:"
+echo "  • Switch panes: Ctrl-a + arrow keys"
+echo "  • Show pane numbers: Ctrl-a + q"
+echo "  • Detach session: Ctrl-a + d"
+echo "  • Reattach: tmux attach -t $SESSION"
+echo ""
+
+# Attach to the session
 tmux attach-session -t $SESSION
 LAUNCHER
 
